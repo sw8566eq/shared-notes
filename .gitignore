@@ -1,6 +1,21 @@
+# Build artifacts
 /linkshr
 /linkshr-desktop
 /cmd/linkshr-desktop/linkshr-desktop
+*.test
+*.out
+
+# Runtime data (created by running the server, not part of the source)
 /linkshr.db
 /linkshr.db-*
 /backups/
+
+# Local Claude Code notes — not published (see CLAUDE.md's own history for why)
+/CLAUDE.md
+
+# Editor / OS cruft
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
