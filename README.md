@@ -1,8 +1,13 @@
 # linkshr
 
-A shared notepad for two housemates. Home-LAN-only, no accounts, no login,
-no per-person identity at all — anyone who can reach it can read and edit
-every note.
+A shared notepad. Notes show up as a scrollable list of cards — tap one to
+open and edit it, hit + to add a new one, copy any note's contents with
+one tap. Saves sync live to every other open tab over a WebSocket, so two
+people looking at the list at once both see changes as they happen.
+
+Built to run on a home LAN, on a machine you already have — Go compiles
+to a single static binary, and SQLite is one file, so there's nothing to
+install or provision beyond copying the binary over.
 
 ## Screenshots
 
@@ -10,35 +15,59 @@ every note.
 |---|---|---|
 | ![Notes list](docs/screenshots/notes-list.png) | ![Note editor](docs/screenshots/note-editor.png) | ![Delete confirmation](docs/screenshots/delete-confirm.png) |
 
-## Security model
+## How it works
 
-There's nothing to configure here — that's the point. **The home WiFi
-password is the entire access-control story.** This app must never be
-port-forwarded or otherwise exposed past the LAN; anything that can reach
-it is treated as fully trusted.
+- **Notes are plain text.** Title + body, no markdown rendering — the
+  copy button hands you exactly what you typed.
+- **Live sync is broadcast-on-save**, not collaborative editing: whoever
+  saves last wins, and every connected client gets pushed the update over
+  `/ws`. No merge conflicts to resolve, no character-level co-editing.
+- **Deleting a note is permanent** — no trash, no restore. The one
+  built-in safety net is a per-note revision history (last 20 edits, kept
+  internally, not exposed in the UI), which protects against overwriting
+  a note *while editing it*, not against deleting it on purpose.
+- **Periodic backups** snapshot the database to `-backup-dir` (daily by
+  default, last 7 kept). Since delete is permanent for the live app but a
+  deleted note can still exist in an older snapshot until it ages out,
+  "permanent" means immediately gone from the app and its revision
+  history — not necessarily from every backup on disk. Shorten the
+  retention in `main.go` if that gap matters to you.
+- **No accounts.** Anyone who can reach the server can read and edit
+  every note — see Hardening below for what that does and doesn't mean
+  in practice.
 
-Notes carry no author — no name, no per-device identity, nothing to set
-up. **Deleting a note is permanent** — no trash, no restore, no undo.
-The one remaining safety net is narrower: a per-note revision history
-(last 20 edits, kept internally, not exposed in the UI) protects against
-accidentally overwriting a note *while editing it*, not against deleting
-it on purpose.
+## Setup
 
-Note: periodic backups (below) mean a deleted note can still exist in an
-older backup snapshot for up to `backupsToKeep` × the backup interval
-(7 days, by default) after you delete it — "permanent" means gone from
-the live app and its revision history immediately, not necessarily from
-every historical snapshot on disk. Shorten `-backup-dir`'s retention in
-`main.go` if that gap matters to you.
+1. Build it:
+   ```
+   go build -o linkshr .
+   ```
+2. Run it:
+   ```
+   ./linkshr -addr :8080
+   ```
+   Then visit `http://<this-machine's-LAN-IP>:8080` from another device
+   on the network.
 
-**Hardening that's in place despite there being no login**, so a lack of
-auth doesn't also mean a lack of basic web hygiene:
+### Flags
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `-addr` | `:8080` | Address to listen on. Bind to your LAN interface specifically (e.g. `-addr 192.168.1.5:8080`) instead of listening on all interfaces if you'd rather be explicit about it. |
+| `-db` | `linkshr.db` | Path to the SQLite database file. |
+| `-backup-dir` | `backups` | Where periodic DB snapshots go (empty string disables backups). A snapshot is taken on startup and every 24h; the last 7 are kept. |
+
+## Hardening
+
+There's no login, so the usual session/CSRF-token machinery doesn't
+apply here — but that doesn't mean skipping basic web hygiene:
+
 - All SQL is parameterized (no injection); note content is only ever
   rendered via `.value`/`.textContent` or explicitly HTML-escaped in the
   frontend (no stored/reflected XSS path).
 - `/ws` rejects cross-origin WebSocket upgrade attempts by default (the
-  library checks `Origin` against `Host`), so another website open in a
-  housemate's browser can't silently listen in on the live note feed.
+  library checks `Origin` against `Host`), so another website open in
+  someone's browser can't silently listen in on the live note feed.
 - Creating/editing a note requires an exact `application/json`
   Content-Type. This isn't pedantry — without it, a page on some other
   site could blind-POST a look-alike request (`Content-Type: text/plain`
@@ -62,27 +91,6 @@ auth doesn't also mean a lack of basic web hygiene:
   applies to files created *after* this change; if you already have a
   `linkshr.db` from before, run `chmod 600 linkshr.db` once by hand.
 
-## Setup
-
-1. Build it:
-   ```
-   go build -o linkshr .
-   ```
-2. Run it:
-   ```
-   ./linkshr -addr :8080
-   ```
-   Then visit `http://<this-machine's-LAN-IP>:8080` from either housemate's
-   device.
-
-### Flags
-
-| Flag | Default | Meaning |
-|---|---|---|
-| `-addr` | `:8080` | Address to listen on. Bind to your LAN interface specifically (e.g. `-addr 192.168.1.5:8080`) if you want the extra layer of not even listening on other interfaces. |
-| `-db` | `linkshr.db` | Path to the SQLite database file. |
-| `-backup-dir` | `backups` | Where periodic DB snapshots go (empty string disables backups). A snapshot is taken on startup and every 24h; the last 7 are kept. |
-
 ## Running it as a background service
 
 Since this runs on your everyday machine rather than a dedicated server,
@@ -92,7 +100,7 @@ reboots). A systemd **user** service does this without needing root:
 ```ini
 # ~/.config/systemd/user/linkshr.service
 [Unit]
-Description=linkshr household notepad
+Description=linkshr shared notepad
 
 [Service]
 WorkingDirectory=%h/linkshr
@@ -113,4 +121,4 @@ loginctl enable-linger "$USER"   # lets it keep running after you log out
 ```
 
 Also worth checking your machine's sleep/suspend settings — a sleeping
-machine means your housemate can't reach the notepad.
+machine means it can't be reached.
