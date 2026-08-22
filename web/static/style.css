@@ -94,6 +94,20 @@ main {
   cursor: pointer;
 }
 
+.note-card.dragging {
+  opacity: 0.5;
+}
+
+.drag-handle {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  height: 1.4rem;
+  color: var(--text-muted);
+  cursor: grab;
+  touch-action: none;
+}
+
 .note-card-main { flex: 1; min-width: 0; }
 
 .note-card-title {
@@ -113,12 +127,6 @@ main {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   white-space: pre-wrap;
-}
-
-.note-card-meta {
-  color: var(--text-muted);
-  font-size: 0.78rem;
-  margin-top: 0.35rem;
 }
 
 .copy-btn {

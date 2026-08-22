@@ -19,6 +19,10 @@ install or provision beyond copying the binary over.
 
 - **Notes are plain text.** Title + body, no markdown rendering — the
   copy button hands you exactly what you typed.
+- **Order is manual.** Drag a note by its handle to reorder the list —
+  editing a note no longer bumps it to the top; only creating one does
+  (new notes appear first). The order syncs live to everyone else too,
+  the same way edits do.
 - **Live sync is broadcast-on-save**, not collaborative editing: whoever
   saves last wins, and every connected client gets pushed the update over
   `/ws`. No merge conflicts to resolve, no character-level co-editing.
@@ -56,6 +60,47 @@ install or provision beyond copying the binary over.
 | `-addr` | `:8080` | Address to listen on. Bind to your LAN interface specifically (e.g. `-addr 192.168.1.5:8080`) instead of listening on all interfaces if you'd rather be explicit about it. |
 | `-db` | `linkshr.db` | Path to the SQLite database file. |
 | `-backup-dir` | `backups` | Where periodic DB snapshots go (empty string disables backups). A snapshot is taken on startup and every 24h; the last 7 are kept. |
+
+## Desktop app
+
+`linkshr-desktop` opens the same UI in a native window instead of a
+browser tab — no address bar, its own entry in your app launcher,
+otherwise identical. It's a thin client: the server above still does
+all the work, this just points a native window at it. Everyone,
+including the machine hosting the server, runs this instead of opening
+a browser.
+
+Build-time dependencies (Debian/Ubuntu):
+```
+sudo apt-get install libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
+```
+Then build it (note this one needs cgo — unlike the server, it can't
+be a fully static binary, since it links against the system's GTK/
+WebKit):
+```
+CGO_ENABLED=1 go build -trimpath -ldflags="-s -w" -o linkshr-desktop ./cmd/linkshr-desktop
+```
+A prebuilt binary only needs the runtime versions of those libraries
+(`libgtk-3-0`, `libwebkit2gtk-4.1-0`) — both already present on most
+GTK-based Linux desktops.
+
+Run it pointed at the server (your own machine's `localhost`, or the
+host's LAN IP from anywhere else):
+```
+./linkshr-desktop -server http://192.168.1.5:8080
+```
+
+For a real app-launcher entry instead of a terminal command, drop a
+`.desktop` file at `~/.local/share/applications/linkshr.desktop`
+(no root needed):
+```ini
+[Desktop Entry]
+Type=Application
+Name=linkshr
+Exec=/home/you/linkshr/linkshr-desktop -server http://192.168.1.5:8080
+Terminal=false
+Categories=Utility;
+```
 
 ## Hardening
 

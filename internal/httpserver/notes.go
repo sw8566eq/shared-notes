@@ -55,9 +55,10 @@ func decodeNoteInput(w http.ResponseWriter, r *http.Request) (noteInput, bool) {
 // event is the shape broadcast over /ws so connected browsers can update
 // their note list live without a full refresh.
 type event struct {
-	Type string      `json:"type"` // "note_upsert" | "note_delete"
+	Type string      `json:"type"` // "note_upsert" | "note_delete" | "notes_reorder"
 	Note *store.Note `json:"note,omitempty"`
 	ID   int64       `json:"id,omitempty"`
+	IDs  []int64     `json:"ids,omitempty"`
 }
 
 func (s *Server) broadcastUpsert(n store.Note) {
@@ -69,6 +70,13 @@ func (s *Server) broadcastUpsert(n store.Note) {
 
 func (s *Server) broadcastDelete(id int64) {
 	msg, err := json.Marshal(event{Type: "note_delete", ID: id})
+	if err == nil {
+		s.hub.Broadcast(msg)
+	}
+}
+
+func (s *Server) broadcastReorder(ids []int64) {
+	msg, err := json.Marshal(event{Type: "notes_reorder", IDs: ids})
 	if err == nil {
 		s.hub.Broadcast(msg)
 	}
@@ -133,6 +141,52 @@ func (s *Server) handleNoteUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.broadcastUpsert(n)
 	writeJSON(w, http.StatusOK, n)
+}
+
+type reorderInput struct {
+	IDs []int64 `json:"ids"`
+}
+
+// maxReorderBytes bounds the reorder request body. Even a large note
+// collection's id list is small.
+const maxReorderBytes = 64 * 1024
+
+// decodeReorderInput applies the same application/json + size-cap rules as
+// decodeNoteInput, and for the same reason: it's what stops a cross-origin
+// page from silently reordering (or, via a too-large body, wasting effort
+// on) someone's note list.
+func decodeReorderInput(w http.ResponseWriter, r *http.Request) (reorderInput, bool) {
+	var in reorderInput
+	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		writeJSONError(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+		return in, false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxReorderBytes)
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeJSONError(w, http.StatusRequestEntityTooLarge, "too many notes to reorder")
+			return in, false
+		}
+		writeJSONError(w, http.StatusBadRequest, "invalid request body")
+		return in, false
+	}
+	return in, true
+}
+
+// handleNotesReorder persists a new manual note order (drag-to-reorder in
+// the UI) and pushes it to every other connected client.
+func (s *Server) handleNotesReorder(w http.ResponseWriter, r *http.Request) {
+	in, ok := decodeReorderInput(w, r)
+	if !ok {
+		return
+	}
+	if err := s.store.ReorderNotes(r.Context(), in.IDs); err != nil {
+		s.internalError(w, "reorder notes", err)
+		return
+	}
+	s.broadcastReorder(in.IDs)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleNoteDelete permanently deletes a note — there is no undo, see

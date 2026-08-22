@@ -38,11 +38,21 @@
     return res.json();
   }
 
+  // Order is manual (drag-to-reorder), not derived from recency, so an
+  // edit replaces a note in place; only a genuinely new note gets
+  // inserted, at the top — matching where the server puts it.
   function upsertLocal(note) {
     const i = state.notes.findIndex((n) => n.id === note.id);
     if (i >= 0) state.notes[i] = note;
-    else state.notes.push(note);
-    state.notes.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+    else state.notes.unshift(note);
+  }
+
+  function reorderLocal(ids) {
+    const byId = new Map(state.notes.map((n) => [n.id, n]));
+    const reordered = ids.map((id) => byId.get(id)).filter(Boolean);
+    const seen = new Set(ids);
+    for (const n of state.notes) if (!seen.has(n.id)) reordered.push(n);
+    state.notes = reordered;
   }
 
   function removeLocal(id) {
@@ -58,11 +68,13 @@
     const preview = (n.body || "").slice(0, 160);
     const title = n.title || "(untitled)";
     return `
-      <li class="note-card" data-id="${n.id}">
+      <li class="note-card" data-id="${n.id}" draggable="true">
+        <span class="drag-handle" title="Drag to reorder" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 6a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm6-16a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/></svg>
+        </span>
         <div class="note-card-main">
           <div class="note-card-title">${escapeHTML(title)}</div>
           <div class="note-card-preview">${escapeHTML(preview)}</div>
-          <div class="note-card-meta">${fmtTime(n.updatedAt)}</div>
         </div>
         <button class="copy-btn" data-id="${n.id}" type="button" title="Copy to clipboard" aria-label="Copy to clipboard">
           <svg class="icon-copy" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/></svg>
@@ -135,6 +147,52 @@
     }, 1200);
   }
 
+  // Drag-to-reorder: native HTML5 drag and drop, no library. The dragged
+  // card is physically moved in the DOM as it crosses other cards, so what
+  // you see while dragging is exactly what gets saved on drop.
+  let dragId = null;
+
+  noteList.addEventListener("dragstart", (e) => {
+    const card = e.target.closest(".note-card");
+    if (!card) return;
+    dragId = Number(card.dataset.id);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", String(dragId)); // Firefox requires data to be set to allow the drag
+    card.classList.add("dragging");
+  });
+
+  noteList.addEventListener("dragend", (e) => {
+    const card = e.target.closest(".note-card");
+    if (card) card.classList.remove("dragging");
+    dragId = null;
+  });
+
+  noteList.addEventListener("dragover", (e) => {
+    if (dragId == null) return;
+    e.preventDefault(); // required to allow a drop
+    const card = e.target.closest(".note-card");
+    if (!card || Number(card.dataset.id) === dragId) return;
+    const dragEl = noteList.querySelector(`.note-card[data-id="${dragId}"]`);
+    if (!dragEl) return;
+    const rect = card.getBoundingClientRect();
+    const before = e.clientY - rect.top < rect.height / 2;
+    (before ? card.before(dragEl) : card.after(dragEl));
+  });
+
+  noteList.addEventListener("drop", (e) => {
+    if (dragId == null) return;
+    e.preventDefault();
+    const prevOrder = state.notes.slice();
+    const ids = [...noteList.querySelectorAll(".note-card")].map((li) => Number(li.dataset.id));
+    reorderLocal(ids);
+    api("/api/notes/reorder", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) })
+      .catch((err) => {
+        state.notes = prevOrder; // the save failed — undo the optimistic reorder
+        render();
+        alert("Couldn't save the new order: " + err.message);
+      });
+  });
+
   noteList.addEventListener("click", (e) => {
     const copyBtn = e.target.closest(".copy-btn");
     if (copyBtn) {
@@ -172,6 +230,9 @@
         render();
       } else if (msg.type === "note_delete") {
         removeLocal(msg.id);
+        render();
+      } else if (msg.type === "notes_reorder") {
+        reorderLocal(msg.ids);
         render();
       }
     };

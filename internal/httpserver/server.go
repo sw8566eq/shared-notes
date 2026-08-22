@@ -50,6 +50,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /ws", s.handleWS)
 	mux.HandleFunc("GET /api/notes", s.handleNotesList)
 	mux.HandleFunc("POST /api/notes", s.handleNotesCreate)
+	mux.HandleFunc("PUT /api/notes/reorder", s.handleNotesReorder)
 	mux.HandleFunc("GET /api/notes/{id}", s.handleNoteGet)
 	mux.HandleFunc("PUT /api/notes/{id}", s.handleNoteUpdate)
 	mux.HandleFunc("DELETE /api/notes/{id}", s.handleNoteDelete)

@@ -2,11 +2,16 @@ CREATE TABLE IF NOT EXISTS notes (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     title      TEXT NOT NULL DEFAULT '',
     body       TEXT NOT NULL DEFAULT '',
+    position   INTEGER NOT NULL DEFAULT 0,
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_notes_updated_at ON notes(updated_at);
+-- Manual order (drag-to-reorder in the UI). New notes get a position
+-- below the current lowest so they appear at the top; see
+-- Store.CreateNote / Store.ReorderNotes. Databases created before this
+-- column existed are migrated in Store.Open (migratePositions).
+CREATE INDEX IF NOT EXISTS idx_notes_position ON notes(position);
 
 -- Undo safety net for accidental *edits* (not deletes — deleting a note
 -- is permanent, see README). Every save keeps a copy of the previous

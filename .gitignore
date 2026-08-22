@@ -1,4 +1,6 @@
 /linkshr
+/linkshr-desktop
+/cmd/linkshr-desktop/linkshr-desktop
 /linkshr.db
 /linkshr.db-*
 /backups/
