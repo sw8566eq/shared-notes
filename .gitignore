@@ -10,7 +10,7 @@
 /linkshr.db-*
 /backups/
 
-# Local Claude Code notes — not published (see CLAUDE.md's own history for why)
+# Local Claude Code dev notes — kept off the public repo on purpose
 /CLAUDE.md
 
 # Editor / OS cruft
