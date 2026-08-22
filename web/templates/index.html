@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notepad</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>Notepad</h1>
+  </header>
+
+  <main>
+    <div id="empty-state" class="empty-state" hidden>No notes yet — tap + to add one.</div>
+    <ul id="note-list" class="note-list"></ul>
+  </main>
+
+  <button id="fab" class="fab" type="button" aria-label="New note">+</button>
+
+  <div id="modal-backdrop" class="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-label="Note editor">
+      <input id="modal-title" class="modal-title" type="text" placeholder="Title" maxlength="200">
+      <textarea id="modal-body" class="modal-body" placeholder="Write something…"></textarea>
+      <div class="modal-meta" id="modal-meta"></div>
+      <div class="modal-actions" id="modal-actions-normal">
+        <button id="modal-delete" class="danger-btn" type="button">Delete</button>
+        <div class="modal-actions-right">
+          <button id="modal-close" class="ghost-btn" type="button">Close</button>
+          <button id="modal-save" class="primary-btn" type="button">Save</button>
+        </div>
+      </div>
+      <div class="modal-actions" id="modal-actions-confirm" hidden>
+        <span class="confirm-text">Delete this note? This cannot be undone.</span>
+        <div class="modal-actions-right">
+          <button id="confirm-delete-cancel" class="ghost-btn" type="button">Cancel</button>
+          <button id="confirm-delete-yes" class="danger-btn" type="button">Delete</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

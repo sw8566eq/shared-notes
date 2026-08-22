@@ -1,0 +1,229 @@
+:root {
+  --bg: #faf9f6;
+  --surface: #ffffff;
+  --border: #e4e0d8;
+  --text: #2b2924;
+  --text-muted: #8a8578;
+  --accent: #4f8a8b;
+  --accent-text: #ffffff;
+  --danger: #b3543f;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.05);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1b18;
+    --surface: #262521;
+    --border: #3a382f;
+    --text: #ece9e1;
+    --text-muted: #9c9789;
+    --shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+  }
+}
+
+* { box-sizing: border-box; }
+
+/* The default UA stylesheet's [hidden] { display: none } is a *user-agent*
+   rule, so any of our own `display` declarations on the same element
+   (.modal-backdrop, .note-list, …) win the cascade and silently defeat
+   `el.hidden = true`. Force it explicitly instead of relying on the UA
+   default. */
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  min-height: 100vh;
+}
+
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.app-header h1 {
+  font-size: 1.25rem;
+  margin: 0;
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+main {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 1rem 1rem 6rem;
+}
+
+.empty-state {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 3rem 1rem;
+}
+
+.note-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.note-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 0.85rem 0.9rem;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+
+.note-card-main { flex: 1; min-width: 0; }
+
+.note-card-title {
+  font-weight: 600;
+  margin-bottom: 0.2rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-card-preview {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: pre-wrap;
+}
+
+.note-card-meta {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  margin-top: 0.35rem;
+}
+
+.copy-btn {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 0.5rem;
+  padding: 0.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.copy-btn:hover { background: var(--border); color: var(--text); }
+.copy-btn .icon-check { color: var(--accent); }
+
+.fab {
+  position: fixed;
+  right: 1.25rem;
+  bottom: 1.5rem;
+  width: 3.25rem;
+  height: 3.25rem;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 1.75rem;
+  line-height: 1;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  z-index: 10;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 20;
+}
+
+.modal {
+  width: 100%;
+  max-width: 480px;
+  max-height: 85vh;
+  background: var(--surface);
+  border-radius: 0.9rem;
+  padding: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  box-shadow: var(--shadow);
+}
+
+.modal-title, .modal-body {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  padding: 0.6rem 0.7rem;
+}
+
+.modal-title { font-weight: 600; font-size: 1.05rem; }
+
+.modal-body {
+  flex: 1;
+  min-height: 12rem;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.modal-meta {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.modal-actions-right { display: flex; gap: 0.5rem; }
+
+.confirm-text {
+  color: var(--danger);
+  font-size: 0.9rem;
+}
+
+button.primary-btn, button.ghost-btn, button.danger-btn {
+  font: inherit;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.9rem;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.primary-btn { background: var(--accent); color: var(--accent-text); }
+.ghost-btn { background: transparent; border-color: var(--border); color: var(--text); }
+.ghost-btn.active { background: var(--border); }
+.danger-btn { background: transparent; color: var(--danger); border-color: var(--danger); }
