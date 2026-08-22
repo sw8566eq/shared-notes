@@ -1,4 +1,4 @@
-# linkshr
+# shared notes
 
 A shared notepad. Notes show up as a scrollable list of cards — tap one to
 open and edit it, hit + to add a new one, copy any note's contents with
