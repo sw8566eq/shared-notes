@@ -1,16 +1,22 @@
 (() => {
   "use strict";
 
-  const state = { notes: [], editingId: null };
+  const state = { notes: [], editingId: null, query: "", theme: "light" };
 
   const el = (id) => document.getElementById(id);
   const noteList = el("note-list");
   const emptyState = el("empty-state");
+  const searchInput = el("search-input");
+  const exportAllBtn = el("export-all-btn");
+  const themeToggle = el("theme-toggle");
+  const liveRegion = el("live-region");
   const fab = el("fab");
   const backdrop = el("modal-backdrop");
+  const modalEl = backdrop.querySelector(".modal");
   const modalTitle = el("modal-title");
   const modalBody = el("modal-body");
   const modalMeta = el("modal-meta");
+  const modalExport = el("modal-export");
   const modalSave = el("modal-save");
   const modalClose = el("modal-close");
   const modalDelete = el("modal-delete");
@@ -38,6 +44,80 @@
     return res.json();
   }
 
+  // --- Dark mode -------------------------------------------------------
+  // A tiny inline <script> in index.html's <head> already applies any
+  // stored preference before first paint (to avoid a flash of the wrong
+  // theme); initTheme() below re-derives the same value — falling back to
+  // the OS preference when nothing's stored yet — and syncs the toggle's
+  // icon/aria-pressed state to match.
+
+  const THEME_KEY = "linkshr-theme";
+
+  function applyTheme(theme) {
+    state.theme = theme;
+    document.documentElement.setAttribute("data-theme", theme);
+    themeToggle.setAttribute("aria-pressed", String(theme === "dark"));
+    themeToggle.querySelector(".icon-theme-dark").hidden = theme === "dark";
+    themeToggle.querySelector(".icon-theme-light").hidden = theme !== "dark";
+  }
+
+  function toggleTheme() {
+    const next = state.theme === "dark" ? "light" : "dark";
+    try { localStorage.setItem(THEME_KEY, next); } catch { /* private mode, etc. — toggle still works this session */ }
+    applyTheme(next);
+  }
+
+  function initTheme() {
+    let stored = null;
+    try { stored = localStorage.getItem(THEME_KEY); } catch { /* ignore */ }
+    if (stored === "light" || stored === "dark") {
+      applyTheme(stored);
+      return;
+    }
+    const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+    applyTheme(prefersDark ? "dark" : "light");
+  }
+
+  initTheme();
+
+  // --- Export ------------------------------------------------------------
+
+  function downloadBlob(filename, content, mime) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function safeFilename(s) {
+    return (s || "").trim().replace(/[\\/:*?"<>|]+/g, "_").slice(0, 80) || "note";
+  }
+
+  function exportNoteTxt(note) {
+    const text = note.title ? `${note.title}\n\n${note.body}` : note.body;
+    downloadBlob(safeFilename(note.title) + ".txt", text, "text/plain");
+  }
+
+  async function exportAllJSON() {
+    // Fetch fresh rather than trusting state.notes, which may be stale.
+    const notes = await api("/api/notes");
+    const date = new Date().toISOString().slice(0, 10);
+    downloadBlob(`linkshr-notes-${date}.json`, JSON.stringify(notes, null, 2), "application/json");
+  }
+
+  // --- Search/filter -------------------------------------------------
+
+  function matchesQuery(n, query) {
+    if (!query) return true;
+    const needle = query.toLowerCase();
+    return (n.title || "").toLowerCase().includes(needle) || (n.body || "").toLowerCase().includes(needle);
+  }
+
   // Order is manual (drag-to-reorder), not derived from recency, so an
   // edit replaces a note in place; only a genuinely new note gets
   // inserted, at the top — matching where the server puts it.
@@ -60,15 +140,28 @@
   }
 
   function render() {
-    emptyState.hidden = state.notes.length !== 0;
-    noteList.innerHTML = state.notes.map(cardHTML).join("");
+    const query = state.query.trim();
+    const visible = state.notes.filter((n) => matchesQuery(n, query));
+    if (state.notes.length === 0) {
+      emptyState.textContent = "No notes yet — tap + to add one.";
+      emptyState.hidden = false;
+    } else if (visible.length === 0) {
+      emptyState.textContent = "No notes match your search.";
+      emptyState.hidden = false;
+    } else {
+      emptyState.hidden = true;
+    }
+    noteList.innerHTML = visible.map(cardHTML).join("");
   }
 
   function cardHTML(n) {
     const preview = (n.body || "").slice(0, 160);
     const title = n.title || "(untitled)";
+    // Dragging a filtered (partial) list would corrupt the other notes'
+    // positions, so reordering is disabled while a search is active.
+    const draggable = state.query.trim() ? "false" : "true";
     return `
-      <li class="note-card" data-id="${n.id}" draggable="true">
+      <li class="note-card" data-id="${n.id}" draggable="${draggable}">
         <span class="drag-handle" title="Drag to reorder" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M9 6a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm6-16a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4zm0 8a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/></svg>
         </span>
@@ -76,7 +169,7 @@
           <div class="note-card-title">${escapeHTML(title)}</div>
           <div class="note-card-preview">${escapeHTML(preview)}</div>
         </div>
-        <button class="copy-btn" data-id="${n.id}" type="button" title="Copy to clipboard" aria-label="Copy to clipboard">
+        <button class="icon-btn copy-btn" data-id="${n.id}" type="button" title="Copy to clipboard" aria-label="Copy to clipboard">
           <svg class="icon-copy" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M16 1H4a2 2 0 0 0-2 2v14h2V3h12V1zm3 4H8a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h11a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2zm0 16H8V7h11v14z"/></svg>
           <svg class="icon-check" viewBox="0 0 24 24" width="18" height="18" hidden><path fill="currentColor" d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>
         </button>
@@ -88,12 +181,18 @@
     modalActionsConfirm.hidden = !confirming;
   }
 
+  // Restored on close so closing the modal (Escape, backdrop click, Save,
+  // Delete) never strands keyboard focus on a page element that's gone.
+  let lastFocusedEl = null;
+
   function openModal(note) {
+    lastFocusedEl = document.activeElement;
     state.editingId = note ? note.id : null;
     modalTitle.value = note ? note.title : "";
     modalBody.value = note ? note.body : "";
     modalMeta.textContent = note ? `Last edited ${fmtTime(note.updatedAt)}` : "New note";
     modalDelete.hidden = !note;
+    modalExport.hidden = !note;
     setConfirmingDelete(false);
     backdrop.hidden = false;
     modalTitle.focus();
@@ -103,6 +202,39 @@
     backdrop.hidden = true;
     state.editingId = null;
     setConfirmingDelete(false);
+    if (lastFocusedEl && typeof lastFocusedEl.focus === "function") lastFocusedEl.focus();
+    lastFocusedEl = null;
+  }
+
+  // --- Self-mutation suppression for the aria-live region ----------------
+  // The hub broadcasts every change to every connected client, including
+  // the tab that made it — so without this, saving/deleting/reordering
+  // would announce your own action back at you as if someone else did it.
+  // This is a short time-boxed heuristic, not a precise mechanism: a
+  // genuine remote change to the same note within the same ~4s window
+  // could be wrongly swallowed once. A fully exact fix would need a
+  // server-side echo token round-tripped through the broadcast, which is
+  // more machinery than this is worth.
+
+  const selfMutated = new Set();
+  function markSelf(id) {
+    selfMutated.add(id);
+    setTimeout(() => selfMutated.delete(id), 4000);
+  }
+  function consumeSelf(id) {
+    return selfMutated.delete(id);
+  }
+  let recentSelfReorder = false;
+  function markSelfReorder() {
+    recentSelfReorder = true;
+    setTimeout(() => { recentSelfReorder = false; }, 4000);
+  }
+
+  function announce(msg) {
+    // Clear first so two identical messages in a row both get announced
+    // (screen readers generally don't re-announce unchanged text).
+    liveRegion.textContent = "";
+    requestAnimationFrame(() => { liveRegion.textContent = msg; });
   }
 
   async function saveModal() {
@@ -111,9 +243,11 @@
       closeModal();
       return;
     }
-    const note = state.editingId
-      ? await api(`/api/notes/${state.editingId}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
+    const id = state.editingId;
+    const note = id
+      ? await api(`/api/notes/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
       : await api("/api/notes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    markSelf(note.id);
     upsertLocal(note);
     render();
     closeModal();
@@ -121,8 +255,10 @@
 
   async function deleteModal() {
     if (!state.editingId) return;
-    await api(`/api/notes/${state.editingId}`, { method: "DELETE" });
-    removeLocal(state.editingId);
+    const id = state.editingId;
+    await api(`/api/notes/${id}`, { method: "DELETE" });
+    markSelf(id);
+    removeLocal(id);
     render();
     closeModal();
   }
@@ -153,6 +289,7 @@
   let dragId = null;
 
   noteList.addEventListener("dragstart", (e) => {
+    if (state.query.trim()) return; // reordering a filtered list would corrupt positions
     const card = e.target.closest(".note-card");
     if (!card) return;
     dragId = Number(card.dataset.id);
@@ -186,6 +323,7 @@
     const ids = [...noteList.querySelectorAll(".note-card")].map((li) => Number(li.dataset.id));
     reorderLocal(ids);
     api("/api/notes/reorder", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) })
+      .then(markSelfReorder)
       .catch((err) => {
         state.notes = prevOrder; // the save failed — undo the optimistic reorder
         render();
@@ -216,8 +354,62 @@
   backdrop.addEventListener("click", (e) => {
     if (e.target === backdrop) closeModal();
   });
+
+  searchInput.addEventListener("input", () => {
+    state.query = searchInput.value;
+    render();
+  });
+  exportAllBtn.addEventListener("click", () => exportAllJSON().catch((e) => alert(e.message)));
+  themeToggle.addEventListener("click", toggleTheme);
+  modalExport.addEventListener("click", () => {
+    const note = state.notes.find((n) => n.id === state.editingId);
+    if (note) exportNoteTxt(note);
+  });
+
+  // Elements considered for the modal's focus trap. Computed fresh on
+  // every Tab press (not cached at open time) since which buttons are
+  // visible changes — e.g. the delete confirm swap.
+  function focusableIn(container) {
+    const selector = 'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    return [...container.querySelectorAll(selector)].filter((e) => e.offsetParent !== null);
+  }
+
+  function isTextEntryTarget(t) {
+    return t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable;
+  }
+
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !backdrop.hidden) closeModal();
+    if (!backdrop.hidden) {
+      if (e.key === "Tab") {
+        const focusable = focusableIn(modalEl);
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey) {
+          if (document.activeElement === first || !focusable.includes(document.activeElement)) {
+            e.preventDefault();
+            last.focus();
+          }
+        } else if (document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+        return;
+      }
+      if (e.key === "Escape") {
+        closeModal();
+      }
+      return;
+    }
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (isTextEntryTarget(e.target)) return;
+    if (e.key === "/") {
+      e.preventDefault();
+      searchInput.focus();
+      searchInput.select();
+    } else if (e.key === "n" || e.key === "N") {
+      openModal(null);
+    }
   });
 
   function connectWS() {
@@ -226,14 +418,29 @@
     ws.onmessage = (ev) => {
       const msg = JSON.parse(ev.data);
       if (msg.type === "note_upsert") {
+        const isSelf = consumeSelf(msg.note.id);
+        const editingThis = state.editingId === msg.note.id;
         upsertLocal(msg.note);
         render();
+        if (!isSelf && !editingThis) {
+          announce(`"${msg.note.title || "(untitled)"}" was updated by someone else.`);
+        }
       } else if (msg.type === "note_delete") {
+        const isSelf = consumeSelf(msg.id);
+        const wasEditingThis = state.editingId === msg.id;
+        const deleted = state.notes.find((n) => n.id === msg.id);
         removeLocal(msg.id);
         render();
+        if (wasEditingThis) {
+          closeModal();
+          announce("The note you were editing was deleted by someone else.");
+        } else if (!isSelf) {
+          announce(deleted ? `"${deleted.title || "(untitled)"}" was deleted.` : "A note was deleted.");
+        }
       } else if (msg.type === "notes_reorder") {
         reorderLocal(msg.ids);
         render();
+        if (!recentSelfReorder) announce("Note order was updated.");
       }
     };
     ws.onclose = () => setTimeout(connectWS, 2000);

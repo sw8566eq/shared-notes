@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"time"
 
 	"linkshr/internal/hub"
 	"linkshr/internal/store"
@@ -58,10 +59,36 @@ func (s *Server) Routes() http.Handler {
 	return s.logged(mux)
 }
 
+// statusRecorder wraps a ResponseWriter to capture the status code a
+// handler sends, so logged can report it after the handler returns.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(status int) {
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
+}
+
+// Unwrap lets net/http's ResponseController see through this wrapper to
+// the underlying ResponseWriter's Hijacker support. Without it,
+// wrapping the ResponseWriter here would silently break /ws: it's how
+// github.com/coder/websocket's Accept finds the connection to hijack for
+// the WebSocket upgrade.
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
+// logged logs one line per request: remote address, method, path, status
+// code, and how long the handler took. For /ws, "how long" means the
+// entire lifetime of that WebSocket connection, since the line can only
+// be written once the handler returns — so a long-lived connection logs
+// at disconnect, not at connect.
 func (s *Server) logged(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("%s %s %s", r.RemoteAddr, r.Method, r.URL.Path)
-		next.ServeHTTP(w, r)
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		log.Printf("%s %s %s %d %s", r.RemoteAddr, r.Method, r.URL.Path, rec.status, time.Since(start))
 	})
 }
 

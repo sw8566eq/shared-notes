@@ -4,11 +4,36 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Notepad</title>
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#4f8a8b">
+<link rel="icon" href="/static/icon-192.png">
 <link rel="stylesheet" href="/static/style.css">
+<script>
+  // Applied before first paint (this script runs in <head>, before
+  // /static/app.js at the end of <body>) so there's no flash of the
+  // wrong theme. app.js's initTheme() re-applies this on load, including
+  // the OS-preference fallback for when nothing's stored yet.
+  (function () {
+    try {
+      var t = localStorage.getItem("linkshr-theme");
+      if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    } catch (e) {}
+  })();
+</script>
 </head>
 <body>
   <header class="app-header">
     <h1>Notepad</h1>
+    <div class="header-actions">
+      <input id="search-input" class="search-input" type="search" placeholder="Search notes… (/)" aria-label="Search notes">
+      <button id="export-all-btn" class="icon-btn" type="button" title="Export all notes as JSON" aria-label="Export all notes as JSON">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M5 20h14v-2H5v2zM13 3h-2v10.17l-3.59-3.58L6 11l6 6 6-6-1.41-1.41L13 13.17V3z"/></svg>
+      </button>
+      <button id="theme-toggle" class="icon-btn" type="button" title="Toggle dark mode" aria-label="Toggle dark mode" aria-pressed="false">
+        <svg class="icon-theme-dark" viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M12 3a9 9 0 1 0 9 9c0-.46-.04-.92-.1-1.36a5.389 5.389 0 0 1-4.4 2.26 5.403 5.403 0 0 1-3.14-9.8c-.44-.06-.9-.1-1.36-.1z"/></svg>
+        <svg class="icon-theme-light" viewBox="0 0 24 24" width="18" height="18" hidden><path fill="currentColor" d="M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm0-5a1 1 0 0 1 1 1v2a1 1 0 1 1-2 0V3a1 1 0 0 1 1-1zm0 18a1 1 0 0 1 1 1v2a1 1 0 1 1-2 0v-2a1 1 0 0 1 1-1zM4.22 4.22a1 1 0 0 1 1.42 0l1.42 1.42a1 1 0 1 1-1.42 1.42L4.22 5.64a1 1 0 0 1 0-1.42zm12.72 12.72a1 1 0 0 1 1.42 0l1.42 1.42a1 1 0 1 1-1.42 1.42l-1.42-1.42a1 1 0 0 1 0-1.42zM1 12a1 1 0 0 1 1-1h2a1 1 0 1 1 0 2H2a1 1 0 0 1-1-1zm18 0a1 1 0 0 1 1-1h2a1 1 0 1 1 0 2h-2a1 1 0 0 1-1-1zM4.22 19.78a1 1 0 0 1 0-1.42l1.42-1.42a1 1 0 1 1 1.42 1.42l-1.42 1.42a1 1 0 0 1-1.42 0zM16.94 6.06a1 1 0 0 1 0-1.42l1.42-1.42a1 1 0 1 1 1.42 1.42l-1.42 1.42a1 1 0 0 1-1.42 0z"/></svg>
+      </button>
+    </div>
   </header>
 
   <main>
@@ -16,13 +41,20 @@
     <ul id="note-list" class="note-list"></ul>
   </main>
 
+  <div id="live-region" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+
   <button id="fab" class="fab" type="button" aria-label="New note">+</button>
 
   <div id="modal-backdrop" class="modal-backdrop" hidden>
     <div class="modal" role="dialog" aria-modal="true" aria-label="Note editor">
       <input id="modal-title" class="modal-title" type="text" placeholder="Title" maxlength="200">
       <textarea id="modal-body" class="modal-body" placeholder="Write something…"></textarea>
-      <div class="modal-meta" id="modal-meta"></div>
+      <div class="modal-meta-row">
+        <div class="modal-meta" id="modal-meta"></div>
+        <button id="modal-export" class="icon-btn" type="button" title="Export this note as .txt" aria-label="Export this note as .txt" hidden>
+          <svg viewBox="0 0 24 24" width="16" height="16"><path fill="currentColor" d="M5 20h14v-2H5v2zM13 3h-2v10.17l-3.59-3.58L6 11l6 6 6-6-1.41-1.41L13 13.17V3z"/></svg>
+        </button>
+      </div>
       <div class="modal-actions" id="modal-actions-normal">
         <button id="modal-delete" class="danger-btn" type="button">Delete</button>
         <div class="modal-actions-right">
