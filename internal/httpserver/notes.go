@@ -54,29 +54,54 @@ func decodeNoteInput(w http.ResponseWriter, r *http.Request) (noteInput, bool) {
 
 // event is the shape broadcast over /ws so connected browsers can update
 // their note list live without a full refresh.
+//
+// "hello" is a fourth, connection-scoped shape (not one of the three
+// broadcasts): handleWS sends it once, right after accept, to hand that
+// one connection its own ClientID. The browser echoes that ID back on
+// its own mutating requests via the clientIDHeader, and this package
+// stamps it onto the resulting broadcast's Origin field. That's what
+// lets a client recognize its own change coming back over /ws by exact
+// match instead of a timing guess — see clientIDFromRequest.
 type event struct {
-	Type string      `json:"type"` // "note_upsert" | "note_delete" | "notes_reorder"
-	Note *store.Note `json:"note,omitempty"`
-	ID   int64       `json:"id,omitempty"`
-	IDs  []int64     `json:"ids,omitempty"`
+	Type     string      `json:"type"`               // "hello" | "note_upsert" | "note_delete" | "notes_reorder"
+	ClientID string      `json:"clientId,omitempty"` // hello only: the ID assigned to this connection
+	Origin   string      `json:"origin,omitempty"`   // note_upsert/note_delete/notes_reorder: which connection's request caused this broadcast, if any
+	Note     *store.Note `json:"note,omitempty"`
+	ID       int64       `json:"id,omitempty"`
+	IDs      []int64     `json:"ids,omitempty"`
 }
 
-func (s *Server) broadcastUpsert(n store.Note) {
-	msg, err := json.Marshal(event{Type: "note_upsert", Note: &n})
+// clientIDHeader carries the ID a browser was handed in its "hello"
+// message back on the request that provoked a broadcast, so the
+// broadcast can be tagged with who caused it. It's optional: a request
+// sent before the WS handshake completes (or with no WS connection at
+// all) just broadcasts with an empty Origin, which every client
+// (including the one that sent it) correctly treats as "not provably
+// mine." Reading it doesn't weaken the Content-Type CSRF gate above —
+// a custom header is never CORS-safelisted either, so it forces the
+// same preflight application/json already requires.
+const clientIDHeader = "X-Linkshr-Client"
+
+func clientIDFromRequest(r *http.Request) string {
+	return r.Header.Get(clientIDHeader)
+}
+
+func (s *Server) broadcastUpsert(n store.Note, origin string) {
+	msg, err := json.Marshal(event{Type: "note_upsert", Note: &n, Origin: origin})
 	if err == nil {
 		s.hub.Broadcast(msg)
 	}
 }
 
-func (s *Server) broadcastDelete(id int64) {
-	msg, err := json.Marshal(event{Type: "note_delete", ID: id})
+func (s *Server) broadcastDelete(id int64, origin string) {
+	msg, err := json.Marshal(event{Type: "note_delete", ID: id, Origin: origin})
 	if err == nil {
 		s.hub.Broadcast(msg)
 	}
 }
 
-func (s *Server) broadcastReorder(ids []int64) {
-	msg, err := json.Marshal(event{Type: "notes_reorder", IDs: ids})
+func (s *Server) broadcastReorder(ids []int64, origin string) {
+	msg, err := json.Marshal(event{Type: "notes_reorder", IDs: ids, Origin: origin})
 	if err == nil {
 		s.hub.Broadcast(msg)
 	}
@@ -120,7 +145,7 @@ func (s *Server) handleNotesCreate(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "create note", err)
 		return
 	}
-	s.broadcastUpsert(n)
+	s.broadcastUpsert(n, clientIDFromRequest(r))
 	writeJSON(w, http.StatusCreated, n)
 }
 
@@ -139,7 +164,7 @@ func (s *Server) handleNoteUpdate(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "note not found")
 		return
 	}
-	s.broadcastUpsert(n)
+	s.broadcastUpsert(n, clientIDFromRequest(r))
 	writeJSON(w, http.StatusOK, n)
 }
 
@@ -185,7 +210,7 @@ func (s *Server) handleNotesReorder(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, "reorder notes", err)
 		return
 	}
-	s.broadcastReorder(in.IDs)
+	s.broadcastReorder(in.IDs, clientIDFromRequest(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -206,6 +231,6 @@ func (s *Server) handleNoteDelete(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusNotFound, "note not found")
 		return
 	}
-	s.broadcastDelete(id)
+	s.broadcastDelete(id, clientIDFromRequest(r))
 	w.WriteHeader(http.StatusNoContent)
 }

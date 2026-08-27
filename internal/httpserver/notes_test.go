@@ -54,12 +54,23 @@ func postJSON(t *testing.T, url string, body string) *http.Response {
 
 func doRequest(t *testing.T, method, url, contentType, body string) *http.Response {
 	t.Helper()
+	return doRequestClient(t, method, url, contentType, body, "")
+}
+
+// doRequestClient is doRequest plus an optional clientIDHeader value, for
+// tests that need to check which connection a broadcast gets attributed
+// to (see event.Origin).
+func doRequestClient(t *testing.T, method, url, contentType, body, clientID string) *http.Response {
+	t.Helper()
 	req, err := http.NewRequest(method, url, strings.NewReader(body))
 	if err != nil {
 		t.Fatalf("building %s %s: %v", method, url, err)
 	}
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
+	}
+	if clientID != "" {
+		req.Header.Set(clientIDHeader, clientID)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -194,23 +205,39 @@ func readEvent(t *testing.T, conn *websocket.Conn) event {
 	return ev
 }
 
-// TestWebSocketBroadcast_FullFlow exercises the real end-to-end path: a
-// connected /ws client should see a note_upsert for create, another for
-// update, a notes_reorder for reorder, and a note_delete for delete — the
-// exact three shapes internal/hub fans out.
-func TestWebSocketBroadcast_FullFlow(t *testing.T) {
-	ts := newTestServer(t)
-
+// dialWS connects to /ws and consumes the "hello" message every
+// connection gets first, returning the connection and the ClientID it
+// was assigned.
+func dialWS(t *testing.T, ts *httptest.Server) (*websocket.Conn, string) {
+	t.Helper()
 	dialCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	conn, _, err := websocket.Dial(dialCtx, wsURL(t, ts), nil)
 	if err != nil {
 		t.Fatalf("dialing /ws: %v", err)
 	}
+	hello := readEvent(t, conn)
+	if hello.Type != "hello" || hello.ClientID == "" {
+		t.Fatalf("first message = %+v, want a hello with a non-empty clientId", hello)
+	}
+	return conn, hello.ClientID
+}
+
+// TestWebSocketBroadcast_FullFlow exercises the real end-to-end path: a
+// connected /ws client should see a note_upsert for create, another for
+// update, a notes_reorder for reorder, and a note_delete for delete —
+// the three mutation shapes internal/hub fans out — and each should
+// carry back the clientId the request was tagged with in its Origin
+// field, exactly, not just eventually/probably (see event's doc comment
+// on why Origin exists at all).
+func TestWebSocketBroadcast_FullFlow(t *testing.T) {
+	ts := newTestServer(t)
+
+	conn, clientID := dialWS(t, ts)
 	defer conn.CloseNow()
 
 	// Create.
-	resp := postJSON(t, ts.URL+"/api/notes", `{"title":"Hello","body":"World"}`)
+	resp := doRequestClient(t, http.MethodPost, ts.URL+"/api/notes", "application/json", `{"title":"Hello","body":"World"}`, clientID)
 	var created store.Note
 	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
 		t.Fatalf("decoding create response: %v", err)
@@ -224,10 +251,13 @@ func TestWebSocketBroadcast_FullFlow(t *testing.T) {
 	if ev.Type != "note_upsert" || ev.Note == nil || ev.Note.ID != created.ID {
 		t.Fatalf("after create, got event %+v, want note_upsert for id %d", ev, created.ID)
 	}
+	if ev.Origin != clientID {
+		t.Fatalf("after create, event origin = %q, want the requesting client's ID %q", ev.Origin, clientID)
+	}
 
 	// Update.
-	updateResp := doRequest(t, http.MethodPut, fmt.Sprintf("%s/api/notes/%d", ts.URL, created.ID),
-		"application/json", `{"title":"Hello","body":"Updated"}`)
+	updateResp := doRequestClient(t, http.MethodPut, fmt.Sprintf("%s/api/notes/%d", ts.URL, created.ID),
+		"application/json", `{"title":"Hello","body":"Updated"}`, clientID)
 	updateResp.Body.Close()
 	if updateResp.StatusCode != http.StatusOK {
 		t.Fatalf("update status = %d, want %d", updateResp.StatusCode, http.StatusOK)
@@ -236,10 +266,13 @@ func TestWebSocketBroadcast_FullFlow(t *testing.T) {
 	if ev.Type != "note_upsert" || ev.Note == nil || ev.Note.Body != "Updated" {
 		t.Fatalf("after update, got event %+v, want note_upsert with body=Updated", ev)
 	}
+	if ev.Origin != clientID {
+		t.Fatalf("after update, event origin = %q, want %q", ev.Origin, clientID)
+	}
 
 	// Reorder (single-note list, but exercises the broadcast shape).
-	reorderResp := doRequest(t, http.MethodPut, ts.URL+"/api/notes/reorder",
-		"application/json", fmt.Sprintf(`{"ids":[%d]}`, created.ID))
+	reorderResp := doRequestClient(t, http.MethodPut, ts.URL+"/api/notes/reorder",
+		"application/json", fmt.Sprintf(`{"ids":[%d]}`, created.ID), clientID)
 	reorderResp.Body.Close()
 	if reorderResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("reorder status = %d, want %d", reorderResp.StatusCode, http.StatusNoContent)
@@ -248,9 +281,12 @@ func TestWebSocketBroadcast_FullFlow(t *testing.T) {
 	if ev.Type != "notes_reorder" || len(ev.IDs) != 1 || ev.IDs[0] != created.ID {
 		t.Fatalf("after reorder, got event %+v, want notes_reorder with ids=[%d]", ev, created.ID)
 	}
+	if ev.Origin != clientID {
+		t.Fatalf("after reorder, event origin = %q, want %q", ev.Origin, clientID)
+	}
 
 	// Delete.
-	deleteResp := doRequest(t, http.MethodDelete, fmt.Sprintf("%s/api/notes/%d", ts.URL, created.ID), "", "")
+	deleteResp := doRequestClient(t, http.MethodDelete, fmt.Sprintf("%s/api/notes/%d", ts.URL, created.ID), "", "", clientID)
 	deleteResp.Body.Close()
 	if deleteResp.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete status = %d, want %d", deleteResp.StatusCode, http.StatusNoContent)
@@ -258,5 +294,45 @@ func TestWebSocketBroadcast_FullFlow(t *testing.T) {
 	ev = readEvent(t, conn)
 	if ev.Type != "note_delete" || ev.ID != created.ID {
 		t.Fatalf("after delete, got event %+v, want note_delete for id %d", ev, created.ID)
+	}
+	if ev.Origin != clientID {
+		t.Fatalf("after delete, event origin = %q, want %q", ev.Origin, clientID)
+	}
+}
+
+// TestWebSocketBroadcast_OriginDistinguishesConnections is the other
+// half of the origin-tagging contract: two different connections must
+// get two different IDs, and a broadcast caused by one must name that
+// one, not the other — the exact comparison the frontend now relies on
+// instead of the old self-mutation timing guess.
+func TestWebSocketBroadcast_OriginDistinguishesConnections(t *testing.T) {
+	ts := newTestServer(t)
+
+	connA, clientA := dialWS(t, ts)
+	defer connA.CloseNow()
+	connB, clientB := dialWS(t, ts)
+	defer connB.CloseNow()
+
+	if clientA == clientB {
+		t.Fatalf("two separate connections got the same clientId %q", clientA)
+	}
+
+	resp := doRequestClient(t, http.MethodPost, ts.URL+"/api/notes", "application/json", `{"title":"Hello","body":"World"}`, clientA)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create status = %d, want %d", resp.StatusCode, http.StatusCreated)
+	}
+
+	for _, tc := range []struct {
+		name string
+		conn *websocket.Conn
+	}{{"A (the actor)", connA}, {"B (a bystander)", connB}} {
+		ev := readEvent(t, tc.conn)
+		if ev.Type != "note_upsert" {
+			t.Fatalf("connection %s: got event type %q, want note_upsert", tc.name, ev.Type)
+		}
+		if ev.Origin != clientA {
+			t.Fatalf("connection %s: event origin = %q, want the actor's ID %q — a bystander must be able to tell this wasn't its own change", tc.name, ev.Origin, clientA)
+		}
 	}
 }

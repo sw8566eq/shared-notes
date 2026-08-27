@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const state = { notes: [], editingId: null, query: "", theme: "light" };
+  const state = { notes: [], editingId: null, query: "", theme: "light", clientId: null };
 
   const el = (id) => document.getElementById(id);
   const noteList = el("note-list");
@@ -34,8 +34,14 @@
     return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
 
+  // Tags every request with this tab's WS connection ID (once known), so
+  // the server can stamp its broadcasts with who caused them — see the
+  // self-mutation section below for why that beats guessing from timing.
   async function api(path, opts) {
-    const res = await fetch(path, opts);
+    opts = opts || {};
+    const headers = Object.assign({}, opts.headers);
+    if (state.clientId) headers["X-Linkshr-Client"] = state.clientId;
+    const res = await fetch(path, Object.assign({}, opts, { headers }));
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || `${res.status} ${res.statusText}`);
@@ -53,12 +59,21 @@
 
   const THEME_KEY = "linkshr-theme";
 
-  function applyTheme(theme) {
-    state.theme = theme;
-    document.documentElement.setAttribute("data-theme", theme);
+  function syncToggleUI(theme) {
     themeToggle.setAttribute("aria-pressed", String(theme === "dark"));
     themeToggle.querySelector(".icon-theme-dark").hidden = theme === "dark";
     themeToggle.querySelector(".icon-theme-light").hidden = theme !== "dark";
+  }
+
+  // Sets an explicit preference: state, the toggle icon, and the
+  // data-theme attribute style.css keys off. Only call this for a
+  // preference the user actually chose (toggleTheme, or initTheme
+  // re-applying a stored one) — see initTheme for why the OS-fallback
+  // path deliberately doesn't call this.
+  function applyTheme(theme) {
+    state.theme = theme;
+    document.documentElement.setAttribute("data-theme", theme);
+    syncToggleUI(theme);
   }
 
   function toggleTheme() {
@@ -74,8 +89,23 @@
       applyTheme(stored);
       return;
     }
-    const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-    applyTheme(prefersDark ? "dark" : "light");
+    // No explicit preference: track the OS setting live instead of
+    // pinning to whatever it happened to be at load. Deliberately not
+    // calling applyTheme here — it sets the data-theme attribute, and
+    // style.css makes that attribute outrank the
+    // @media(prefers-color-scheme) rule, which would stop this tab
+    // from following any later OS-level theme switch for the rest of
+    // the session.
+    let media = null;
+    try {
+      media = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)");
+    } catch { /* restricted/sandboxed context with no working matchMedia — falls back to light below */ }
+    const syncToOS = () => {
+      state.theme = media && media.matches ? "dark" : "light";
+      syncToggleUI(state.theme);
+    };
+    syncToOS();
+    if (media) media.addEventListener("change", syncToOS);
   }
 
   initTheme();
@@ -91,7 +121,12 @@
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.revokeObjectURL(url);
+    // Revoking in the same tick is a known footgun in WebKit-family
+    // browsers: the download can still be reading the blob when the
+    // URL is invalidated, producing an empty/truncated file. Give it a
+    // beat — the object URL only needs to outlive the click, not the
+    // page.
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
   }
 
   function safeFilename(s) {
@@ -103,11 +138,18 @@
     downloadBlob(safeFilename(note.title) + ".txt", text, "text/plain");
   }
 
+  // yyyy-mm-dd in the viewer's local calendar date, not UTC's — a
+  // straight toISOString().slice(0,10) is always the UTC date, which
+  // reads as tomorrow's date to anyone west of UTC in the evening.
+  function localDateStamp(d) {
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+
   async function exportAllJSON() {
     // Fetch fresh rather than trusting state.notes, which may be stale.
     const notes = await api("/api/notes");
-    const date = new Date().toISOString().slice(0, 10);
-    downloadBlob(`linkshr-notes-${date}.json`, JSON.stringify(notes, null, 2), "application/json");
+    downloadBlob(`linkshr-notes-${localDateStamp(new Date())}.json`, JSON.stringify(notes, null, 2), "application/json");
   }
 
   // --- Search/filter -------------------------------------------------
@@ -210,24 +252,12 @@
   // The hub broadcasts every change to every connected client, including
   // the tab that made it — so without this, saving/deleting/reordering
   // would announce your own action back at you as if someone else did it.
-  // This is a short time-boxed heuristic, not a precise mechanism: a
-  // genuine remote change to the same note within the same ~4s window
-  // could be wrongly swallowed once. A fully exact fix would need a
-  // server-side echo token round-tripped through the broadcast, which is
-  // more machinery than this is worth.
-
-  const selfMutated = new Set();
-  function markSelf(id) {
-    selfMutated.add(id);
-    setTimeout(() => selfMutated.delete(id), 4000);
-  }
-  function consumeSelf(id) {
-    return selfMutated.delete(id);
-  }
-  let recentSelfReorder = false;
-  function markSelfReorder() {
-    recentSelfReorder = true;
-    setTimeout(() => { recentSelfReorder = false; }, 4000);
+  // The server tags each broadcast with the clientId of whichever
+  // connection's request caused it (event.origin — see notes.go), so this
+  // is an exact match against this tab's own ID, not a guess: no window
+  // to race, no genuine remote change that can be wrongly swallowed.
+  function isSelf(origin) {
+    return !!state.clientId && origin === state.clientId;
   }
 
   function announce(msg) {
@@ -247,7 +277,6 @@
     const note = id
       ? await api(`/api/notes/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
       : await api("/api/notes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-    markSelf(note.id);
     upsertLocal(note);
     render();
     closeModal();
@@ -257,7 +286,6 @@
     if (!state.editingId) return;
     const id = state.editingId;
     await api(`/api/notes/${id}`, { method: "DELETE" });
-    markSelf(id);
     removeLocal(id);
     render();
     closeModal();
@@ -323,7 +351,6 @@
     const ids = [...noteList.querySelectorAll(".note-card")].map((li) => Number(li.dataset.id));
     reorderLocal(ids);
     api("/api/notes/reorder", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) })
-      .then(markSelfReorder)
       .catch((err) => {
         state.notes = prevOrder; // the save failed — undo the optimistic reorder
         render();
@@ -362,8 +389,10 @@
   exportAllBtn.addEventListener("click", () => exportAllJSON().catch((e) => alert(e.message)));
   themeToggle.addEventListener("click", toggleTheme);
   modalExport.addEventListener("click", () => {
-    const note = state.notes.find((n) => n.id === state.editingId);
-    if (note) exportNoteTxt(note);
+    // Export what's actually in the modal, not the last-saved copy in
+    // state.notes — otherwise unsaved edits are silently left out.
+    if (state.editingId == null) return;
+    exportNoteTxt({ title: modalTitle.value, body: modalBody.value });
   });
 
   // Elements considered for the modal's focus trap. Computed fresh on
@@ -390,7 +419,12 @@
             e.preventDefault();
             last.focus();
           }
-        } else if (document.activeElement === last) {
+        } else if (document.activeElement === last || !focusable.includes(document.activeElement)) {
+          // The !includes case covers focus having landed somewhere in
+          // the modal that isn't a tab stop (e.g. a click on the meta
+          // text) — without it, a plain Tab from there has no guard at
+          // all and can escape the still-open modal via the browser's
+          // default tab order instead of re-entering the trap.
           e.preventDefault();
           first.focus();
         }
@@ -417,39 +451,46 @@
     const ws = new WebSocket(proto + location.host + "/ws");
     ws.onmessage = (ev) => {
       const msg = JSON.parse(ev.data);
-      if (msg.type === "note_upsert") {
-        const isSelf = consumeSelf(msg.note.id);
+      if (msg.type === "hello") {
+        state.clientId = msg.clientId;
+      } else if (msg.type === "note_upsert") {
+        const self = isSelf(msg.origin);
         const editingThis = state.editingId === msg.note.id;
         upsertLocal(msg.note);
         render();
-        if (!isSelf && !editingThis) {
+        if (!self && !editingThis) {
           announce(`"${msg.note.title || "(untitled)"}" was updated by someone else.`);
         }
       } else if (msg.type === "note_delete") {
-        const isSelf = consumeSelf(msg.id);
+        const self = isSelf(msg.origin);
         const wasEditingThis = state.editingId === msg.id;
         const deleted = state.notes.find((n) => n.id === msg.id);
         removeLocal(msg.id);
         render();
-        if (wasEditingThis) {
+        if (wasEditingThis && !self) {
           closeModal();
           announce("The note you were editing was deleted by someone else.");
-        } else if (!isSelf) {
+        } else if (!self) {
           announce(deleted ? `"${deleted.title || "(untitled)"}" was deleted.` : "A note was deleted.");
         }
       } else if (msg.type === "notes_reorder") {
+        const self = isSelf(msg.origin);
         reorderLocal(msg.ids);
         render();
-        if (!recentSelfReorder) announce("Note order was updated.");
+        if (!self) announce("Note order was updated.");
       }
     };
     ws.onclose = () => setTimeout(connectWS, 2000);
   }
 
   async function init() {
+    // Connect first: the /ws handshake and its "hello" (which assigns
+    // state.clientId — see isSelf above) then has the whole initial
+    // fetch below to complete before the page is interactive, rather
+    // than racing a user's first click against it.
+    connectWS();
     state.notes = (await api("/api/notes")) || [];
     render();
-    connectWS();
   }
 
   init().catch((err) => {

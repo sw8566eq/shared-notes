@@ -1,23 +1,44 @@
 :root {
-  --bg: #faf9f6;
-  --surface: #ffffff;
-  --border: #e4e0d8;
-  --text: #2b2924;
-  --text-muted: #8a8578;
+  /* Each palette's literal colors live here exactly once — the light/
+     dark blocks below all repoint --bg/--surface/etc. at these via
+     var() instead of repeating the hex values, so a future palette
+     tweak can't touch one block and silently leave another stale. */
+  --light-bg: #faf9f6;
+  --light-surface: #ffffff;
+  --light-border: #e4e0d8;
+  --light-text: #2b2924;
+  --light-text-muted: #8a8578;
+  --light-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.05);
+
+  --dark-bg: #1c1b18;
+  --dark-surface: #262521;
+  --dark-border: #3a382f;
+  --dark-text: #ece9e1;
+  --dark-text-muted: #9c9789;
+  --dark-shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+
   --accent: #4f8a8b;
   --accent-text: #ffffff;
   --danger: #b3543f;
-  --shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.05);
+
+  /* Active palette — light by default; the blocks below repoint these
+     at --dark-* rather than redeclaring literal colors. */
+  --bg: var(--light-bg);
+  --surface: var(--light-surface);
+  --border: var(--light-border);
+  --text: var(--light-text);
+  --text-muted: var(--light-text-muted);
+  --shadow: var(--light-shadow);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #1c1b18;
-    --surface: #262521;
-    --border: #3a382f;
-    --text: #ece9e1;
-    --text-muted: #9c9789;
-    --shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+    --bg: var(--dark-bg);
+    --surface: var(--dark-surface);
+    --border: var(--dark-border);
+    --text: var(--dark-text);
+    --text-muted: var(--dark-text-muted);
+    --shadow: var(--dark-shadow);
   }
 }
 
@@ -26,21 +47,21 @@
    whenever JS has set data-theme (see app.js's applyTheme). Falls back to
    the @media block above when nothing's been chosen yet. */
 :root[data-theme="dark"] {
-  --bg: #1c1b18;
-  --surface: #262521;
-  --border: #3a382f;
-  --text: #ece9e1;
-  --text-muted: #9c9789;
-  --shadow: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --bg: var(--dark-bg);
+  --surface: var(--dark-surface);
+  --border: var(--dark-border);
+  --text: var(--dark-text);
+  --text-muted: var(--dark-text-muted);
+  --shadow: var(--dark-shadow);
 }
 
 :root[data-theme="light"] {
-  --bg: #faf9f6;
-  --surface: #ffffff;
-  --border: #e4e0d8;
-  --text: #2b2924;
-  --text-muted: #8a8578;
-  --shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.05);
+  --bg: var(--light-bg);
+  --surface: var(--light-surface);
+  --border: var(--light-border);
+  --text: var(--light-text);
+  --text-muted: var(--light-text-muted);
+  --shadow: var(--light-shadow);
 }
 
 * { box-sizing: border-box; }

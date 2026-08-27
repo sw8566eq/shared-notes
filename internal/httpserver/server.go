@@ -63,12 +63,36 @@ func (s *Server) Routes() http.Handler {
 // handler sends, so logged can report it after the handler returns.
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
+	status      int
+	wroteHeader bool
 }
 
 func (r *statusRecorder) WriteHeader(status int) {
+	if r.wroteHeader {
+		// Match net/http's own behavior: a second WriteHeader call is a
+		// superfluous no-op on the wire, so don't let it overwrite the
+		// status we already recorded for the one that actually reached
+		// the client (see handleIndex's error-after-partial-write path).
+		return
+	}
+	r.wroteHeader = true
 	r.status = status
 	r.ResponseWriter.WriteHeader(status)
+}
+
+// Write must also route through WriteHeader: http.ResponseWriter embeds
+// as an interface here, not a struct, so without this override a
+// handler that calls Write before any explicit WriteHeader (like
+// handleIndex's html/template execution) would have that Write promoted
+// straight to the underlying ResponseWriter — silently bypassing our
+// override and leaving status stuck at whatever logged() pre-seeded,
+// right or not, by coincidence rather than by tracking the real
+// implicit-200 net/http itself sends on a header-less first Write.
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	if !r.wroteHeader {
+		r.WriteHeader(http.StatusOK)
+	}
+	return r.ResponseWriter.Write(b)
 }
 
 // Unwrap lets net/http's ResponseController see through this wrapper to
