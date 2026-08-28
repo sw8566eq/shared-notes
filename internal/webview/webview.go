@@ -18,6 +18,18 @@
 //     (mswebview2) support upstream carries — several hundred KB of
 //     headers and cgo directives this project never uses — is dropped
 //     entirely rather than vendored dead weight.
+//  3. Upstream's GTK engine never connects to WebKitWebContext's
+//     "download-started" signal, so a triggered download (linkshr's
+//     Export buttons click an `<a download>` on a blob: URL, same as
+//     any browser) has nowhere to go — WebKit drops it silently, no
+//     error either side of the JS/native boundary. include/webview.h's
+//     gtk_webkit_engine constructor adds a "download-started" handler
+//     that saves to the user's Downloads directory (falling back to
+//     $HOME), same as a real browser would — plus a "decide-policy"
+//     handler that (empirically, not obviously) has to exist for
+//     "download-started" to fire at all on WebKitGTK 2.52, even though
+//     it does nothing but defer to the default action; see that
+//     handler's comment for how this was confirmed.
 //
 // The API surface (New, WebView, Hint, etc.) is unchanged from
 // upstream, so this reads like any other webview binding.

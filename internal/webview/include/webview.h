@@ -1284,6 +1284,65 @@ public:
       webkit_settings_set_enable_developer_extras(settings, true);
     }
 
+    // WebKitGTK doesn't save a triggered download (e.g. an `<a download>`
+    // click on a blob: URL, which is how linkshr's browser-side Export
+    // buttons work) anywhere on its own: with nothing connected to
+    // "download-started"/"decide-destination", the download is simply
+    // dropped, silently, no error either side of the JS/native boundary.
+    // Route it to the user's Downloads directory instead, same as a
+    // regular browser would. If that special directory isn't configured
+    // (bare/minimal desktop environments), fall back to $HOME rather
+    // than leaving the download undecided.
+    g_signal_connect(
+        webkit_web_view_get_context(WEBKIT_WEB_VIEW(m_webview)),
+        "download-started",
+        G_CALLBACK(+[](WebKitWebContext *, WebKitDownload *download,
+                        gpointer) {
+          g_signal_connect(
+              download, "decide-destination",
+              G_CALLBACK(+[](WebKitDownload *download,
+                             const gchar *suggested_filename,
+                             gpointer) -> gboolean {
+                const gchar *dir =
+                    g_get_user_special_dir(G_USER_DIRECTORY_DOWNLOAD);
+                if (!dir) {
+                  dir = g_get_home_dir();
+                }
+                gchar *path =
+                    g_build_filename(dir, suggested_filename, nullptr);
+                gchar *uri = g_filename_to_uri(path, nullptr, nullptr);
+                if (uri) {
+                  webkit_download_set_destination(download, uri);
+                  g_free(uri);
+                }
+                g_free(path);
+                return TRUE;
+              }),
+              nullptr);
+        }),
+        nullptr);
+
+    // Empirically required alongside the "download-started" handler
+    // above, not decorative: without *some* "decide-policy" handler
+    // connected — even one that inspects nothing and always defers to
+    // the default action, as this one does — WebKitGTK 2.52 never
+    // emits "download-started" for an `<a download>` navigation at
+    // all, silently falling back to trying to display the response
+    // inline instead. Confirmed by driving a real WebKitGTK window
+    // under Xvfb with a synthetic XTest click (a scripted
+    // `element.click()` isn't enough either — this needs an actual
+    // input event, since the download attribute is gated on user
+    // activation): the download-started handler above never fires
+    // without this one connected too, and starts firing the moment it
+    // is.
+    g_signal_connect(
+        WEBKIT_WEB_VIEW(m_webview), "decide-policy",
+        G_CALLBACK(+[](WebKitWebView *, WebKitPolicyDecision *,
+                        WebKitPolicyDecisionType, gpointer) -> gboolean {
+          return FALSE; // defer to WebKit's own default handling
+        }),
+        nullptr);
+
     if (m_owns_window) {
       gtk_widget_grab_focus(GTK_WIDGET(m_webview));
       gtk_widget_show_all(m_window);

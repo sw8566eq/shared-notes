@@ -2,6 +2,8 @@
 /linkshr
 /linkshr-desktop
 /cmd/linkshr-desktop/linkshr-desktop
+# ...and platform-suffixed builds (e.g. GOOS/GOARCH cross-compiles)
+/linkshr-*-*
 *.test
 *.out
 

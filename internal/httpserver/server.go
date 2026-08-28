@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"time"
 
 	"linkshr/internal/hub"
 	"linkshr/internal/store"
@@ -58,10 +59,60 @@ func (s *Server) Routes() http.Handler {
 	return s.logged(mux)
 }
 
+// statusRecorder wraps a ResponseWriter to capture the status code a
+// handler sends, so logged can report it after the handler returns.
+type statusRecorder struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+}
+
+func (r *statusRecorder) WriteHeader(status int) {
+	if r.wroteHeader {
+		// Match net/http's own behavior: a second WriteHeader call is a
+		// superfluous no-op on the wire, so don't let it overwrite the
+		// status we already recorded for the one that actually reached
+		// the client (see handleIndex's error-after-partial-write path).
+		return
+	}
+	r.wroteHeader = true
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
+}
+
+// Write must also route through WriteHeader: http.ResponseWriter embeds
+// as an interface here, not a struct, so without this override a
+// handler that calls Write before any explicit WriteHeader (like
+// handleIndex's html/template execution) would have that Write promoted
+// straight to the underlying ResponseWriter — silently bypassing our
+// override and leaving status stuck at whatever logged() pre-seeded,
+// right or not, by coincidence rather than by tracking the real
+// implicit-200 net/http itself sends on a header-less first Write.
+func (r *statusRecorder) Write(b []byte) (int, error) {
+	if !r.wroteHeader {
+		r.WriteHeader(http.StatusOK)
+	}
+	return r.ResponseWriter.Write(b)
+}
+
+// Unwrap lets net/http's ResponseController see through this wrapper to
+// the underlying ResponseWriter's Hijacker support. Without it,
+// wrapping the ResponseWriter here would silently break /ws: it's how
+// github.com/coder/websocket's Accept finds the connection to hijack for
+// the WebSocket upgrade.
+func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
+// logged logs one line per request: remote address, method, path, status
+// code, and how long the handler took. For /ws, "how long" means the
+// entire lifetime of that WebSocket connection, since the line can only
+// be written once the handler returns — so a long-lived connection logs
+// at disconnect, not at connect.
 func (s *Server) logged(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("%s %s %s", r.RemoteAddr, r.Method, r.URL.Path)
-		next.ServeHTTP(w, r)
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		log.Printf("%s %s %s %d %s", r.RemoteAddr, r.Method, r.URL.Path, rec.status, time.Since(start))
 	})
 }
 
