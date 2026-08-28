@@ -59,10 +59,24 @@
 
   const THEME_KEY = "linkshr-theme";
 
+  // Set while initTheme() is tracking the live OS preference (no explicit
+  // choice stored yet); cleared by stopTrackingOS() the moment an explicit
+  // preference takes over, so that old listener can't keep firing and
+  // desyncing the toggle icon from the actually-applied theme — see
+  // applyTheme.
+  let osMedia = null;
+  let syncToOS = null;
+
   function syncToggleUI(theme) {
     themeToggle.setAttribute("aria-pressed", String(theme === "dark"));
     themeToggle.querySelector(".icon-theme-dark").hidden = theme === "dark";
     themeToggle.querySelector(".icon-theme-light").hidden = theme !== "dark";
+  }
+
+  function stopTrackingOS() {
+    if (osMedia && syncToOS) osMedia.removeEventListener("change", syncToOS);
+    osMedia = null;
+    syncToOS = null;
   }
 
   // Sets an explicit preference: state, the toggle icon, and the
@@ -71,6 +85,7 @@
   // re-applying a stored one) — see initTheme for why the OS-fallback
   // path deliberately doesn't call this.
   function applyTheme(theme) {
+    stopTrackingOS();
     state.theme = theme;
     document.documentElement.setAttribute("data-theme", theme);
     syncToggleUI(theme);
@@ -100,12 +115,16 @@
     try {
       media = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)");
     } catch { /* restricted/sandboxed context with no working matchMedia — falls back to light below */ }
-    const syncToOS = () => {
+    const sync = () => {
       state.theme = media && media.matches ? "dark" : "light";
       syncToggleUI(state.theme);
     };
-    syncToOS();
-    if (media) media.addEventListener("change", syncToOS);
+    sync();
+    if (media) {
+      media.addEventListener("change", sync);
+      osMedia = media;
+      syncToOS = sync;
+    }
   }
 
   initTheme();
@@ -244,7 +263,23 @@
     backdrop.hidden = true;
     state.editingId = null;
     setConfirmingDelete(false);
-    if (lastFocusedEl && typeof lastFocusedEl.focus === "function") lastFocusedEl.focus();
+    // Elements inside #note-list never survive to be refocused: render()
+    // (called right after this, on every save/delete/reorder — and also
+    // reachable *before* this point, since a save's own WS self-echo can
+    // race ahead of its HTTP response and trigger a render() while
+    // saveModal() is still awaiting) always rebuilds that whole subtree
+    // from scratch rather than patching it. So a lastFocusedEl in there
+    // is either already detached (isConnected false — the race above
+    // already tore it down) or, if a render() hasn't caught up yet,
+    // about to be replaced by an equivalent-looking but distinct node.
+    // Note .contains() alone can't tell "detached" from "never was in
+    // note-list" — both return false — hence the explicit isConnected
+    // check. Either way, .focus()'ing it here would be moot or
+    // immediately undone, so fall back to the FAB — always present,
+    // never touched by render() — instead of letting focus silently
+    // fall through to <body>.
+    const target = lastFocusedEl && lastFocusedEl.isConnected && !noteList.contains(lastFocusedEl) ? lastFocusedEl : fab;
+    target.focus();
     lastFocusedEl = null;
   }
 
@@ -278,8 +313,13 @@
       ? await api(`/api/notes/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
       : await api("/api/notes", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     upsertLocal(note);
-    render();
+    // closeModal() before render(): it restores focus to whatever
+    // triggered openModal, which can be a note card's own child (e.g.
+    // the copy button). render() rebuilds #note-list's innerHTML, and
+    // .focus() on a since-detached node is a silent no-op — so the
+    // restore has to happen while that node still exists.
     closeModal();
+    render();
   }
 
   async function deleteModal() {
@@ -287,8 +327,8 @@
     const id = state.editingId;
     await api(`/api/notes/${id}`, { method: "DELETE" });
     removeLocal(id);
+    closeModal(); // before render() — see saveModal's comment
     render();
-    closeModal();
   }
 
   async function copyNote(id, btn) {
@@ -446,6 +486,49 @@
     }
   });
 
+  // Messages arriving before the initial /api/notes fetch below resolves
+  // are queued instead of applied immediately: applying one against the
+  // still-empty state.notes, only to have the fetch's snapshot then
+  // unconditionally overwrite state.notes, would silently discard
+  // whatever it did (a just-created note vanishing, a just-deleted one
+  // resurrected). Replayed once notesLoaded flips true in init(); after
+  // that first load, later messages (including across a reconnect) run
+  // immediately as before.
+  let notesLoaded = false;
+  let pendingMsgs = [];
+
+  function handleWSMessage(msg) {
+    if (msg.type === "note_upsert") {
+      const self = isSelf(msg.origin);
+      const editingThis = state.editingId === msg.note.id;
+      upsertLocal(msg.note);
+      render();
+      if (!self && !editingThis) {
+        announce(`"${msg.note.title || "(untitled)"}" was updated by someone else.`);
+      }
+    } else if (msg.type === "note_delete") {
+      const self = isSelf(msg.origin);
+      const wasEditingThis = state.editingId === msg.id;
+      const deleted = state.notes.find((n) => n.id === msg.id);
+      removeLocal(msg.id);
+      if (wasEditingThis && !self) {
+        // closeModal() before render() — see saveModal's comment: it
+        // restores focus to a node render() is about to detach.
+        closeModal();
+        render();
+        announce("The note you were editing was deleted by someone else.");
+      } else {
+        render();
+        if (!self) announce(deleted ? `"${deleted.title || "(untitled)"}" was deleted.` : "A note was deleted.");
+      }
+    } else if (msg.type === "notes_reorder") {
+      const self = isSelf(msg.origin);
+      reorderLocal(msg.ids);
+      render();
+      if (!self) announce("Note order was updated.");
+    }
+  }
+
   function connectWS() {
     const proto = location.protocol === "https:" ? "wss://" : "ws://";
     const ws = new WebSocket(proto + location.host + "/ws");
@@ -453,32 +536,13 @@
       const msg = JSON.parse(ev.data);
       if (msg.type === "hello") {
         state.clientId = msg.clientId;
-      } else if (msg.type === "note_upsert") {
-        const self = isSelf(msg.origin);
-        const editingThis = state.editingId === msg.note.id;
-        upsertLocal(msg.note);
-        render();
-        if (!self && !editingThis) {
-          announce(`"${msg.note.title || "(untitled)"}" was updated by someone else.`);
-        }
-      } else if (msg.type === "note_delete") {
-        const self = isSelf(msg.origin);
-        const wasEditingThis = state.editingId === msg.id;
-        const deleted = state.notes.find((n) => n.id === msg.id);
-        removeLocal(msg.id);
-        render();
-        if (wasEditingThis && !self) {
-          closeModal();
-          announce("The note you were editing was deleted by someone else.");
-        } else if (!self) {
-          announce(deleted ? `"${deleted.title || "(untitled)"}" was deleted.` : "A note was deleted.");
-        }
-      } else if (msg.type === "notes_reorder") {
-        const self = isSelf(msg.origin);
-        reorderLocal(msg.ids);
-        render();
-        if (!self) announce("Note order was updated.");
+        return;
       }
+      if (!notesLoaded) {
+        pendingMsgs.push(msg);
+        return;
+      }
+      handleWSMessage(msg);
     };
     ws.onclose = () => setTimeout(connectWS, 2000);
   }
@@ -487,10 +551,17 @@
     // Connect first: the /ws handshake and its "hello" (which assigns
     // state.clientId — see isSelf above) then has the whole initial
     // fetch below to complete before the page is interactive, rather
-    // than racing a user's first click against it.
+    // than racing a user's first click against it. Any mutation
+    // broadcasts that arrive in the meantime are queued (see
+    // pendingMsgs above) and replayed here, instead of being silently
+    // clobbered by the fetch's snapshot.
     connectWS();
     state.notes = (await api("/api/notes")) || [];
+    notesLoaded = true;
     render();
+    const queued = pendingMsgs;
+    pendingMsgs = [];
+    queued.forEach(handleWSMessage);
   }
 
   init().catch((err) => {
