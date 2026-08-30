@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # cmd/linkshr-desktop and internal/webview need cgo and the system
+      # GTK/WebKit headers unconditionally (see CLAUDE.md) — installed up
+      # front so both `go vet ./...` and the desktop build below compile
+      # them instead of failing outright.
+      - name: Install desktop build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt -l found unformatted files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      # The server must stay a fully static binary — that's the whole
+      # point of splitting the desktop client into its own cgo build —
+      # so this doesn't just build it, it checks ldd agrees.
+      - name: Build server (static, no cgo)
+        env:
+          CGO_ENABLED: 0
+        run: |
+          go build -o linkshr .
+          if ! ldd ./linkshr 2>&1 | grep -q 'not a dynamic executable'; then
+            echo "::error::linkshr is dynamically linked; a CGO_ENABLED=0 build must stay static"
+            ldd ./linkshr || true
+            exit 1
+          fi
+
+      - name: Build desktop client (cgo, needs GTK/WebKit)
+        env:
+          CGO_ENABLED: 1
+        run: go build -trimpath -ldflags="-s -w" -o linkshr-desktop ./cmd/linkshr-desktop
+
+      # Scoped to internal/... rather than ./... on purpose — see
+      # CLAUDE.md: cmd/linkshr-desktop and internal/webview only need to
+      # compile here, the real test suite lives under internal/.
+      - name: Test
+        run: go test -race ./internal/...

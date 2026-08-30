@@ -11,9 +11,13 @@ install or provision beyond copying the binary over.
 
 ## Screenshots
 
-| Notes list | Editing a note | Delete confirmation |
+| Notes list | Search | Dark mode |
 |---|---|---|
-| ![Notes list](docs/screenshots/notes-list.png) | ![Note editor](docs/screenshots/note-editor.png) | ![Delete confirmation](docs/screenshots/delete-confirm.png) |
+| ![Notes list](docs/screenshots/notes-list.png) | ![Search](docs/screenshots/search.png) | ![Dark mode](docs/screenshots/dark-mode.png) |
+
+| Editing a note | Delete confirmation |
+|---|---|
+| ![Note editor](docs/screenshots/note-editor.png) | ![Delete confirmation](docs/screenshots/delete-confirm.png) |
 
 ## How it works
 
@@ -36,6 +40,23 @@ install or provision beyond copying the binary over.
   "permanent" means immediately gone from the app and its revision
   history — not necessarily from every backup on disk. Shorten the
   retention in `main.go` if that gap matters to you.
+- **Search filters the list live** as you type (title and body). Press
+  `/` from anywhere to jump to the search box. Drag-to-reorder is turned
+  off while a search is active, since reordering a filtered view would
+  scramble the position of notes the search is hiding.
+- **Export** a single note as `.txt` from its editor, or every note at
+  once as one `.json` file from the header button — a plain-text copy
+  for backing up or moving your notes elsewhere.
+- **Dark mode** follows your OS setting by default; the toggle in the
+  header overrides that and is remembered per browser.
+- **Keyboard and screen-reader friendly.** `/` focuses search and `n`
+  opens a new note from anywhere on the page; the note editor traps Tab
+  focus and closes on Escape; changes someone else makes are announced
+  to screen readers instead of just appearing silently.
+- **Installable.** It ships a web app manifest, so "Add to Home Screen"
+  on a phone's browser gives it a standalone icon with no address bar —
+  a lighter alternative to the native desktop app below for anything
+  that isn't a Linux desktop.
 - **No accounts.** Anyone who can reach the server can read and edit
   every note — see Hardening below for what that does and doesn't mean
   in practice.
@@ -167,3 +188,9 @@ loginctl enable-linger "$USER"   # lets it keep running after you log out
 
 Also worth checking your machine's sleep/suspend settings — a sleeping
 machine means it can't be reached.
+
+Every request is logged to stdout — remote address, method, path, status
+code, and how long it took. Under the service above, that means:
+```
+journalctl --user -u linkshr -f
+```
