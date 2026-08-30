@@ -11,9 +11,13 @@ install or provision beyond copying the binary over.
 
 ## Screenshots
 
-| Notes list | Editing a note | Delete confirmation |
+| Notes list | Search | Dark mode |
 |---|---|---|
-| ![Notes list](docs/screenshots/notes-list.png) | ![Note editor](docs/screenshots/note-editor.png) | ![Delete confirmation](docs/screenshots/delete-confirm.png) |
+| ![Notes list](docs/screenshots/notes-list.png) | ![Search](docs/screenshots/search.png) | ![Dark mode](docs/screenshots/dark-mode.png) |
+
+| Editing a note | Delete confirmation |
+|---|---|
+| ![Note editor](docs/screenshots/note-editor.png) | ![Delete confirmation](docs/screenshots/delete-confirm.png) |
 
 ## How it works
 
