@@ -6,6 +6,18 @@ import (
 	"time"
 )
 
+// waitOrFatal fails the test if done isn't closed within timeout, for the
+// two tests below that run their subject on a goroutine specifically to
+// guard against it deadlocking rather than returning.
+func waitOrFatal(t *testing.T, done <-chan struct{}, timeout time.Duration, msg string) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		t.Fatal(msg)
+	}
+}
+
 // TestUnregisterClosesSendChannel exercises the contract handleWS depends
 // on: once a client is unregistered, reading its Send() channel must report
 // closed (ok=false) rather than block, or handleWS's receive loop would
@@ -79,11 +91,7 @@ func TestBroadcastSkipsFullClientWithoutBlocking(t *testing.T) {
 		}
 		close(done)
 	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Broadcast blocked on a full client instead of dropping its overflow")
-	}
+	waitOrFatal(t, done, 2*time.Second, "Broadcast blocked on a full client instead of dropping its overflow")
 
 	// fast has plenty of room for `extra` messages, so it must have
 	// received all of them — a full sibling client must not affect
@@ -98,19 +106,10 @@ func TestBroadcastSkipsFullClientWithoutBlocking(t *testing.T) {
 
 	// slow's buffer should hold exactly sendBuffer messages — the "fill"
 	// batch, with every "overflow" message dropped rather than queued.
-	for i := 0; i < sendBuffer; i++ {
-		select {
-		case <-slow.Send():
-		default:
-			t.Fatalf("slow client only received %d of %d buffered messages", i, sendBuffer)
-		}
-	}
-	select {
-	case _, ok := <-slow.Send():
-		if ok {
-			t.Fatal("slow client's buffer held more than sendBuffer messages; overflow should have been dropped")
-		}
-	default:
+	// This test is package hub, so it can read the buffered channel's
+	// queue length directly instead of draining it to count.
+	if n := len(slow.send); n != sendBuffer {
+		t.Fatalf("slow client's buffer holds %d messages, want exactly %d", n, sendBuffer)
 	}
 }
 
@@ -168,9 +167,5 @@ func TestConcurrentRegisterUnregisterBroadcast(t *testing.T) {
 		wg.Wait()
 		close(done)
 	}()
-	select {
-	case <-done:
-	case <-time.After(10 * time.Second):
-		t.Fatal("concurrent Register/Unregister/Broadcast did not finish — likely deadlocked")
-	}
+	waitOrFatal(t, done, 10*time.Second, "concurrent Register/Unregister/Broadcast did not finish — likely deadlocked")
 }
